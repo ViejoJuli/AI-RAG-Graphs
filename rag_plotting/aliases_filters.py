@@ -11,20 +11,11 @@ Purpose:
 Why separate?
     These are pure-Python tables + tiny functions, hot on the call path.
     Keeping them in one module avoids import sprawl and preserves speed.
-
-Usage:
-    from rag_plotting.aliases_filters import (
-        REGION_ALIASES, AMERICAS_SUBREGIONS, COUNTRY_ALIASES,
-        SYN_DEFAULT, SYN_COUNTRY, SYN_FITCH, SYN_SETTLE, SYN_MARKET,
-        normalize_region, _match_any, _region_filter, _any_field_filter, _merge_filters,
-        _extract_payload_fields
-    )
 """
 
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
-# Qdrant model types are optional import sites; type-ignore to keep this module light.
 try:
     from qdrant_client.http import models as qmodels  # type: ignore
 except Exception:  # pragma: no cover
@@ -35,7 +26,11 @@ except Exception:  # pragma: no cover
 # =========================
 REGION_ALIASES = {
     "europe": ["Europe", "EUROPE", "europe", "UE", "EU"],
-    "americas": ["Americas", "AMERICAS", "america", "America", "LATAM", "LatAm", "latin america", "américa"],
+    "americas": [
+        "Americas","AMERICAS","america","America","LATAM","LatAm",
+        "latin america","américa","north america","south america",
+        "caribbean","central america"
+    ],
     "africa": ["Africa","AFRICA","africa","África"],
     "asia": ["Asia","ASIA","asia"],
     "oceania": ["Oceania","oceania","Pacific","pacific","Oceanía"],
@@ -76,7 +71,7 @@ def normalize_region(name: Optional[str]) -> Optional[str]:
     return None
 
 # =========================
-# Qdrant filter builders
+# Qdrant filters
 # =========================
 def _match_any(values: List[str]):
     if qmodels is None:
@@ -92,7 +87,7 @@ def _region_filter(region: Optional[str]):
     if canon == "Americas":
         candidates += AMERICAS_SUBREGIONS + [c.upper() for c in AMERICAS_SUBREGIONS] + [c.lower() for c in AMERICAS_SUBREGIONS]
     return qmodels.Filter(
-        must=[qmodels.FieldCondition(key="region", match=_match_any(list(dict.fromkeys(candidates))))]
+        must=[qmodels.FieldCondition(key="region", match=_match_any(list(dict.fromkeys(candidates))))]  # type: ignore
     )
 
 def _any_field_filter(key: str, values: List[str]):
@@ -101,20 +96,19 @@ def _any_field_filter(key: str, values: List[str]):
     values = [v for v in values if v]
     if not values:
         return None
-    return qmodels.Filter(must=[qmodels.FieldCondition(key=key, match=_match_any(values))])
+    return qmodels.Filter(must=[qmodels.FieldCondition(key=key, match=_match_any(values))])  # type: ignore
 
-def _text_filter(field: str, text: Optional[str]):
+def _text_filter(key: str, text: str):
     """
-    Full-text/substring filter on a given payload field.
-    Requires full-text index for best results; otherwise acts as substring match.
+    Full-text filter (Qdrant FT). Si FT no está disponible, cae a igualdad suave.
     """
-    if qmodels is None or not (field and text):
+    if qmodels is None or not text:
         return None
     try:
-        return qmodels.Filter(must=[qmodels.FieldCondition(key=field, match=qmodels.MatchText(text=text))])  # type: ignore
+        mt = qmodels.MatchText(text=text)  # requiere FT index en el campo
     except Exception:
-        # Fallback: plain Match with the whole string (less robust)
-        return qmodels.Filter(must=[qmodels.FieldCondition(key=field, match=qmodels.MatchValue(value=text))])
+        mt = _match_any([text])  # fallback
+    return qmodels.Filter(must=[qmodels.FieldCondition(key=key, match=mt)])  # type: ignore
 
 def _merge_filters(*filters):
     if qmodels is None:
@@ -130,9 +124,6 @@ def _merge_filters(*filters):
 # Payload → row standardizer
 # =========================
 def _extract_payload_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Flat row standardization. Incluye variantes de nombres vistas en tus payloads.
-    """
     text = payload.get("text") or payload.get("content") or payload.get("chunk") or ""
     return {
         "text": text,
@@ -145,8 +136,7 @@ def _extract_payload_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
         "section": payload.get("section") or payload.get("Section"),
         "subsection": payload.get("subsection") or payload.get("Subsection"),
         "datagroup_title": payload.get("datagroup_title") or payload.get("data_group_title"),
-        # 👇 importante: soportar ambas grafías
-        "committed_date": payload.get("committed_date") or payload.get("commited_date") or payload.get("date") or payload.get("Date"),
+        "committed_date": payload.get("committed_date") or payload.get("date") or payload.get("Date"),
         "metric": payload.get("metric") or payload.get("Metric") or payload.get("field"),
         "value": payload.get("value") or payload.get("Value") or payload.get("numeric_value"),
         "unit": payload.get("unit") or payload.get("Unit"),
