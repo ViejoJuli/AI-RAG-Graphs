@@ -26,32 +26,36 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-# =========================
-# ===== CONFIGURATION =====
-# =========================
+
+def _as_int(env_name: str, default: int) -> int:
+    v = os.getenv(env_name)
+    try:
+        return int(v) if v is not None else default
+    except Exception:
+        return default
 
 # Model name
-MODEL_NAME = os.getenv("MODEL_NAME")
+MODEL_NAME = os.getenv("MODEL_NAME") or "gpt-4o-mini"
 
 # VLLM API configuration
-VLLM_API_URL = os.getenv("VLLM_API_URL")
-VLLM_API_TOKEN = os.getenv("VLLM_API_TOKEN")  # API token for authentication
+VLLM_API_URL   = os.getenv("VLLM_API_URL") or ""
+VLLM_API_TOKEN = os.getenv("VLLM_API_TOKEN") or ""
 
 # Qdrant configuration
-QDRANT_HOST = os.getenv("QDRANT_HOST")
-QDRANT_PORT = int(os.getenv("QDRANT_PORT"))
-VECTOR_SIZE = int(os.getenv("VECTOR_SIZE"))  # Size of vectors used in the application
+QDRANT_HOST = os.getenv("QDRANT_HOST") or "localhost"
+QDRANT_PORT = _as_int("QDRANT_PORT", 6333)
+VECTOR_SIZE = _as_int("VECTOR_SIZE", 1536)  # valor razonable por defecto
 
-# Ollama server configuration
-OLLAMA_SERVER_URL = os.getenv("OLLAMA_SERVER_URL")  # URL for generating embeddings
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL")  # Name of the embedding model
+# Ollama / embeddings
+OLLAMA_SERVER_URL = os.getenv("OLLAMA_SERVER_URL") or ""   # p.ej. http://localhost:11434/api/embeddings
+EMBEDDING_MODEL   = os.getenv("EMBEDDING_MODEL")   or "nomic-embed-text"
 
 # Qdrant collection name
-COLLECTION_NAME = os.getenv("COLLECTION_NAME")  # Name of the Qdrant collection
+COLLECTION_NAME = os.getenv("COLLECTION_NAME") or "rag_plotting"
 
 # === Token/Context budgets ===
-MODEL_CONTEXT_WINDOW_TOKENS = int(os.getenv("MODEL_CONTEXT_WINDOW_TOKENS", "8192"))
-RESP_TOKENS_PLAN = int(os.getenv("RESP_TOKENS_PLAN", "384"))
-RESP_TOKENS_ENUM = int(os.getenv("RESP_TOKENS_ENUM", "512"))
-RESP_TOKENS_COMBINED = int(os.getenv("RESP_TOKENS_COMBINED", "900"))
-SAFETY_MARGIN_TOKENS = int(os.getenv("SAFETY_MARGIN_TOKENS", "256"))
+MODEL_CONTEXT_WINDOW_TOKENS = _as_int("MODEL_CONTEXT_WINDOW_TOKENS", 8192)
+RESP_TOKENS_PLAN            = _as_int("RESP_TOKENS_PLAN", 384)
+RESP_TOKENS_ENUM            = _as_int("RESP_TOKENS_ENUM", 512)
+RESP_TOKENS_COMBINED        = _as_int("RESP_TOKENS_COMBINED", 900)
+SAFETY_MARGIN_TOKENS        = _as_int("SAFETY_MARGIN_TOKENS", 256)

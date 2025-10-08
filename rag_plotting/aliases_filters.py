@@ -43,10 +43,8 @@ REGION_ALIASES = {
     "world": ["World","Global","global","earth","all countries","the world"],
 }
 
-# When region='Americas', include subregions often used in datasets
 AMERICAS_SUBREGIONS = ["Americas","North America","South America","Latin America","Caribbean","Central America"]
 
-# Country aliases for normalization
 COUNTRY_ALIASES = {
     "us":"United States","usa":"United States","u.s.":"United States","u.s.a.":"United States","united states of america":"United States",
     "uk":"United Kingdom","u.k.":"United Kingdom","britain":"United Kingdom","great britain":"United Kingdom",
@@ -57,7 +55,6 @@ COUNTRY_ALIASES = {
     "czech republic":"Czechia",
 }
 
-# Domain synonyms
 SYN_DEFAULT = ["definition", "status", "list", "overview"]
 SYN_COUNTRY = ["country policy", "regulation", "statute", "requirement"]
 SYN_FITCH   = ["Fitch rating", "Fitch Ratings", "credit rating Fitch", "sovereign rating Fitch", "sovereign credit score"]
@@ -68,18 +65,12 @@ SYN_MARKET  = ["stock market", "stock exchange", "primary exchange", "bourse", "
 # Normalization helpers
 # =========================
 def normalize_region(name: Optional[str]) -> Optional[str]:
-    """
-    Normalize a region string to canonical Title form if it matches known aliases;
-    returns None if unknown.
-    """
     if not name:
         return None
     key = name.strip().lower()
-
     for canon, aliases in REGION_ALIASES.items():
         if key == canon or key in [a.lower() for a in aliases]:
             return "Middle East" if canon == "middle east" else canon.title()
-
     if key in ["world","global","all","earth"]:
         return "World"
     return None
@@ -88,29 +79,18 @@ def normalize_region(name: Optional[str]) -> Optional[str]:
 # Qdrant filter builders
 # =========================
 def _match_any(values: List[str]):
-    """
-    Return a qmodels.MatchAny with unique, truthy values.
-    If qmodels is not available (e.g., during static analysis), returns None.
-    """
     if qmodels is None:
         return None
     clean = list(dict.fromkeys([v for v in values if v]))
     return qmodels.MatchAny(any=clean)
 
 def _region_filter(region: Optional[str]):
-    """
-    Build a robust region filter. For 'Americas', also match subregions as often stored in payloads.
-    If qmodels is unavailable, returns None to let caller fallback to unfiltered search.
-    """
     if qmodels is None or not region:
         return None
-
     canon = normalize_region(region) or region
     candidates = [canon, canon.title(), canon.upper(), canon.lower()]
-
     if canon == "Americas":
         candidates += AMERICAS_SUBREGIONS + [c.upper() for c in AMERICAS_SUBREGIONS] + [c.lower() for c in AMERICAS_SUBREGIONS]
-
     return qmodels.Filter(
         must=[qmodels.FieldCondition(key="region", match=_match_any(list(dict.fromkeys(candidates))))]
     )
@@ -123,11 +103,20 @@ def _any_field_filter(key: str, values: List[str]):
         return None
     return qmodels.Filter(must=[qmodels.FieldCondition(key=key, match=_match_any(values))])
 
+def _text_filter(field: str, text: Optional[str]):
+    """
+    Full-text/substring filter on a given payload field.
+    Requires full-text index for best results; otherwise acts as substring match.
+    """
+    if qmodels is None or not (field and text):
+        return None
+    try:
+        return qmodels.Filter(must=[qmodels.FieldCondition(key=field, match=qmodels.MatchText(text=text))])  # type: ignore
+    except Exception:
+        # Fallback: plain Match with the whole string (less robust)
+        return qmodels.Filter(must=[qmodels.FieldCondition(key=field, match=qmodels.MatchValue(value=text))])
+
 def _merge_filters(*filters):
-    """
-    Merge multiple qmodels.Filter into one (must-conjunction).
-    If any filter is None or qmodels not present, they are skipped.
-    """
     if qmodels is None:
         return None
     must = []
@@ -142,8 +131,7 @@ def _merge_filters(*filters):
 # =========================
 def _extract_payload_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Standardize payload fields coming from Qdrant points to a flat row for downstream steps.
-    Only deals with renaming/choosing the first present alias – no heavy processing.
+    Flat row standardization. Incluye variantes de nombres vistas en tus payloads.
     """
     text = payload.get("text") or payload.get("content") or payload.get("chunk") or ""
     return {
@@ -157,7 +145,8 @@ def _extract_payload_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
         "section": payload.get("section") or payload.get("Section"),
         "subsection": payload.get("subsection") or payload.get("Subsection"),
         "datagroup_title": payload.get("datagroup_title") or payload.get("data_group_title"),
-        "committed_date": payload.get("committed_date") or payload.get("date") or payload.get("Date"),
+        # 👇 importante: soportar ambas grafías
+        "committed_date": payload.get("committed_date") or payload.get("commited_date") or payload.get("date") or payload.get("Date"),
         "metric": payload.get("metric") or payload.get("Metric") or payload.get("field"),
         "value": payload.get("value") or payload.get("Value") or payload.get("numeric_value"),
         "unit": payload.get("unit") or payload.get("Unit"),

@@ -39,7 +39,7 @@ from rag_plotting.config import (
 
 # Optional LLM client import with graceful fallback
 try:
-    from rag_plotting.llm_client import call_openai  # to be provided next
+    from rag_plotting.llm_client import call_openai  # to be provided
 except Exception:  # pragma: no cover
     def call_openai(messages, max_tokens=None) -> str:  # type: ignore
         # Safe stub: return empty → triggers heuristic fallback paths
@@ -54,13 +54,12 @@ def _normalize_country_name(name: str) -> Optional[str]:
     key = name.strip()
     if not key:
         return None
-    # Title-case without forcing specific alias maps (kept minimal here)
     cleaned = re.sub(r"[^A-Za-z\s\.\-']", " ", key).strip()
     return cleaned.title() if cleaned else None
 
 def extract_countries_from_text(text: str) -> List[str]:
     """
-    Heuristically extract explicit country mentions when user compares a few.
+    Heurísticamente extrae países cuando el usuario compara algunos explícitamente.
     """
     text = re.sub(r"\bvs\.?\b", ",", text, flags=re.I)
     text = re.sub(r"\bversus\b", ",", text, flags=re.I)
@@ -89,11 +88,28 @@ def is_compare_query(text: str) -> bool:
     return any(k in t for k in ["compare","compar","vs","versus","contra"])
 
 
+def _region_from_user_query(user_query: str) -> Optional[str]:
+    """
+    Detecta la región explícita pedida por el usuario a partir de alias conocidos.
+    Si se detecta, siempre debe prevalecer sobre la región propuesta por el LLM.
+    """
+    q = user_query.lower()
+    # match por alias
+    for canon, aliases in REGION_ALIASES.items():
+        for token in aliases + [canon]:
+            if token.lower() in q:
+                return "Middle East" if canon == "middle east" else canon.title()
+    # palabras genéricas
+    if any(tok in q for tok in ["world", "global", "all countries"]):
+        return "World"
+    return None
+
+
 # --------- planning ---------
 def interpret_query(user_query: str) -> QueryPlan:
     """
-    Produce a QueryPlan from the user question and add deterministic heuristics.
-    If LLM is unavailable or fails to parse, uses a safe heuristic plan.
+    Produce un QueryPlan robusto. Si el LLM marca una región incorrecta
+    pero el usuario explicitó otra, la del usuario PREVALECE.
     """
     print(f"[Plan] Interpreting: {user_query}")
     msgs = build_plan_prompt(user_query)
@@ -122,17 +138,24 @@ def interpret_query(user_query: str) -> QueryPlan:
             retrieval_hints=None
         )
 
-    # Region normalization from aliases in the raw query if model didn't set it
-    qlow = user_query.lower()
-    if plan.region is None:
-        for canon, aliases in REGION_ALIASES.items():
-            if any(a.lower() in qlow for a in aliases + [canon]):
-                plan.region = "Middle East" if canon == "middle east" else canon.title()
-                break
-    if plan.region is None and any(tok in qlow for tok in ["world","global","all countries"]):
+    # === Región declarada por el USUARIO (debe ganar) ===
+    region_user = _region_from_user_query(user_query)
+
+    # Si el LLM no puso región, intenta inferir por alias (legacy)
+    if plan.region is None and region_user:
+        plan.region = region_user
+
+    # Si el LLM puso una región pero el usuario pidió otra explícita → sobreescribe
+    if region_user and plan.region and (normalize_region(plan.region) != region_user):
+        print(f"[Plan] Overriding LLM region '{plan.region}' with user region '{region_user}'")
+        plan.region = region_user
+
+    # Si aún no hay región y el texto sugiere global
+    if plan.region is None and any(tok in (user_query or "").lower() for tok in ["world","global","all countries"]):
         plan.region = "World"
 
     # Entity type guess
+    qlow = user_query.lower()
     if plan.entity_type is None:
         if any(k in qlow for k in ["market cap","stock market","exchange","bourse"]):
             plan.entity_type = "stock_market"
@@ -141,12 +164,12 @@ def interpret_query(user_query: str) -> QueryPlan:
             plan.entity_type = "country"
             plan.task_kind = plan.task_kind or "country_metric_map"
 
-    # Respect user's explicit chart request
+    # Respeta el pedido explícito de tipo de gráfico
     enforced = detect_requested_chart_type(user_query)
     if enforced:
         plan.chart_hint = enforced
 
-    # Respect manual explicit countries (comparisons)
+    # Respeta países manuales (comparaciones)
     if manual_countries:
         print(f"[Plan] Manual countries detected: {manual_countries}")
         plan.entities = manual_countries
@@ -165,8 +188,7 @@ _LLM_REGION_CACHE: Dict[str, List[str]] = {}
 
 def llm_region_countries(region: str) -> List[str]:
     """
-    Ask the LLM for the exhaustive list of countries in a macro-region; cache results.
-    Falls back to empty list if LLM unavailable.
+    Pide al LLM la lista de países por macro-región; cachea el resultado.
     """
     canon = normalize_region(region) or region
     if canon in _LLM_REGION_CACHE:
@@ -188,14 +210,11 @@ def llm_region_countries(region: str) -> List[str]:
 
 def enumerate_entities(user_query: str, plan: QueryPlan) -> EntityList:
     """
-    Enumerate concrete entities. Priority:
-      - Respect explicit plan.entities (manual mentions).
-      - If entity_type='country' and region present → ask LLM for exhaustive list; fallback to empty.
-      - Otherwise ask the LLM to list entities (e.g., stock markets).
+    Enumeración de entidades. Respeta `plan.entities` si el usuario los dio.
     """
     print(f"[Enum] entity_type={plan.entity_type} region={plan.region}")
 
-    # Respect manual entities
+    # Respeta manual entities
     if plan.entities:
         out = EntityList(entity_type=plan.entity_type or "entity", exhaustive=False, entities=plan.entities)
         print(f"[Enum] Using manual entities={len(out.entities)}")
@@ -212,7 +231,7 @@ def enumerate_entities(user_query: str, plan: QueryPlan) -> EntityList:
         print(f"[Enum] Countries via LLM={len(out.entities)}")
         return out
 
-    # Ask LLM for general entities (e.g., stock markets)
+    # LLM para otras entidades (e.g., stock markets)
     msgs = build_entity_prompt(user_query, plan.model_dump())
     raw = call_openai(msgs, max_tokens=RESP_TOKENS_ENUM)
     try:
